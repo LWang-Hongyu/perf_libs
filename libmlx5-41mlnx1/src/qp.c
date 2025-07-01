@@ -46,6 +46,8 @@
 #include "doorbell.h"
 #include "wqe.h"
 
+#include "perf.h"
+
 enum {
 	MLX5_OPCODE_BASIC	= 0x00010000,
 	MLX5_OPCODE_MANAGED	= 0x00020000,
@@ -2178,6 +2180,18 @@ void mlx5_update_post_send_one(struct mlx5_qp *qp, enum ibv_qp_state qp_state, e
 	}
 }
 
+int mlx5_get_sq_num(struct ibv_qp *ibqp)
+{
+	struct mlx5_qp *qp = to_mqp(ibqp);
+  return qp->sq.head - qp->sq.tail;
+}
+
+int mlx5_get_rq_num(struct ibv_qp *ibqp)
+{
+	struct mlx5_qp *qp = to_mqp(ibqp);
+  return qp->rq.head - qp->rq.tail;
+}
+
 static inline int __mlx5_post_send(struct ibv_qp *ibqp, struct ibv_exp_send_wr *wr,
 				   struct ibv_exp_send_wr **bad_wr, int is_exp_wr) __attribute__((always_inline));
 static inline int __mlx5_post_send(struct ibv_qp *ibqp, struct ibv_exp_send_wr *wr,
@@ -2191,6 +2205,9 @@ static inline int __mlx5_post_send(struct ibv_qp *ibqp, struct ibv_exp_send_wr *
 	int size;
 	unsigned idx;
 	uint64_t exp_send_flags;
+
+  struct ibv_exp_send_wr* start_wr = wr;
+  
 #ifdef MLX5_DEBUG
 	FILE *fp = to_mctx(ibqp->context)->dbg_fp;
 #endif
@@ -2219,8 +2236,6 @@ static inline int __mlx5_post_send(struct ibv_qp *ibqp, struct ibv_exp_send_wr *
 			*bad_wr = wr;
 			goto out;
 		}
-
-
 
 		err = qp->gen_data.post_send_one(wr, qp, exp_send_flags, seg, &size);
 		if (unlikely(err)) {
@@ -2265,6 +2280,9 @@ post_send_no_db:
 
 	mlx5_unlock(&qp->sq.lock);
 
+  if(start_wr->wr_id != (uint64_t)-1)
+    perf_preemption_process(ibqp, nreq, start_wr->exp_opcode == IBV_EXP_WR_RDMA_READ);
+  
 	return err;
 }
 
@@ -2366,7 +2384,13 @@ int mlx5_exp_rollback_send(struct ibv_qp *ibqp,
 }
 
 int mlx5_post_send(struct ibv_qp *ibqp, struct ibv_send_wr *wr,
-		   struct ibv_send_wr **bad_wr)
+		     struct ibv_send_wr **bad_wr)
+{
+  return mlx5_post_send2(ibqp, wr, bad_wr, 0);
+}
+
+int mlx5_post_send2(struct ibv_qp *ibqp, struct ibv_send_wr *wr,
+		     struct ibv_send_wr **bad_wr, uint32_t skip_perf)
 {
 
 #ifdef MW_DEBUG
@@ -2383,21 +2407,56 @@ int mlx5_post_send(struct ibv_qp *ibqp, struct ibv_send_wr *wr,
 			return EINVAL;
 	}
 #endif
+  if(!skip_perf)
+  {
+    int ret = perf_process(ibqp, wr);
+    if(ret == -1)
+    {
+      perf_bg_post(ibqp, wr);
+      return 0;
+    }
+    else if(ret > 0)
+    {
+      perf_poll_post(ibqp, wr, ret);
+      return 0;
+    }
+  }
+	
+  return __mlx5_post_send(ibqp, (struct ibv_exp_send_wr *)wr,
+      (struct ibv_exp_send_wr **)bad_wr, 0);
 
-	return __mlx5_post_send(ibqp, (struct ibv_exp_send_wr *)wr,
-				(struct ibv_exp_send_wr **)bad_wr, 0);
 }
 
 int mlx5_exp_post_send(struct ibv_qp *ibqp, struct ibv_exp_send_wr *wr,
-		       struct ibv_exp_send_wr **bad_wr)
+		     struct ibv_exp_send_wr **bad_wr)
 {
+  return mlx5_exp_post_send2(ibqp, wr, bad_wr, 0);
+}
 
+int mlx5_exp_post_send2(struct ibv_qp *ibqp, struct ibv_exp_send_wr *wr,
+		     struct ibv_exp_send_wr **bad_wr, uint32_t skip_perf)
+{
 #ifdef MW_DEBUG
 	if (wr->exp_opcode == IBV_EXP_WR_BIND_MW)
 		/* MW is upstream, the ibv_exp_send_wr layout is not supported */
 		return EINVAL;
 #endif
-	return __mlx5_post_send(ibqp, wr, bad_wr, 1);
+    
+  if(!skip_perf)
+  {
+    int ret = perf_exp_process(ibqp, wr);
+    if(ret == -1)
+    {
+      perf_exp_bg_post(ibqp, wr);
+      return 0;
+    }
+    else if(ret > 0)
+    {
+      perf_exp_poll_post(ibqp, wr, ret);
+      return 0;
+    }
+  }
+  return __mlx5_post_send(ibqp, wr, bad_wr, 1);
 }
 
 int mlx5_bind_mw(struct ibv_qp *qp, struct ibv_mw *mw,
@@ -2458,8 +2517,13 @@ static void set_sig_seg(struct mlx5_qp *qp, struct mlx5_rwqe_sig *sig,
 	sig->signature = ~sign;
 }
 
-int mlx5_post_recv(struct ibv_qp *ibqp, struct ibv_recv_wr *wr,
-		   struct ibv_recv_wr **bad_wr)
+int mlx5_post_recv(struct ibv_qp *ibqp, struct ibv_recv_wr *wr, struct ibv_recv_wr **bad_wr)
+{
+  return mlx5_post_recv2(ibqp, wr, bad_wr, 0);
+}
+
+int mlx5_post_recv2(struct ibv_qp *ibqp, struct ibv_recv_wr *wr,
+		   struct ibv_recv_wr **bad_wr, uint32_t skip_perf)
 {
 	struct mlx5_qp *qp = to_mqp(ibqp);
 	struct mlx5_wqe_data_seg *scat;
@@ -2472,6 +2536,16 @@ int mlx5_post_recv(struct ibv_qp *ibqp, struct ibv_recv_wr *wr,
 #ifdef MLX5_DEBUG
 	FILE *fp = to_mctx(ibqp->context)->dbg_fp;
 #endif
+
+  if(!skip_perf)
+  {
+    int ret = perf_recv_process(ibqp, wr);
+    if(ret == -1)
+    {
+      perf_bg_recv_post(ibqp, wr);
+      return 0;
+    }
+  }
 
 	mlx5_lock(&qp->rq.lock);
 

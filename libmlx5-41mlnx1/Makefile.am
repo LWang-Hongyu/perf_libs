@@ -1,4 +1,4 @@
-AM_CFLAGS = -g -Wall -Werror -D_GNU_SOURCE -I$(includedir) -Xlinker -z -Xlinker nodelete
+AM_CFLAGS = -g -Wall -Werror -D_GNU_SOURCE -I$(includedir) -Xlinker -z -Xlinker nodelete -lrperf -lpthread -lrt
 LDFLAGS += @NUMA_LIB@
 EXTRA_DIST = src/mlx5.map libmlx5.spec.in mlx5.driver
 EXTRA_DIST += debian
@@ -9,8 +9,8 @@ EXTRA_DIST += libmlx5.spec
 
 mlx5_version_script = @MLX5_VERSION_SCRIPT@
 
-MLX5_SOURCES = src/buf.c src/cq.c src/dbrec.c src/mlx5.c src/qp.c src/srq.c src/verbs.c src/implicit_lkey.c src/ec.c
-noinst_HEADERS = src/bitmap.h src/doorbell.h src/list.h src/mlx5-abi.h src/mlx5.h src/wqe.h src/implicit_lkey.h src/ec.h src/mlx5dv.h src/array_size.h
+MLX5_SOURCES = src/buf.c src/cq.c src/dbrec.c src/mlx5.c src/qp.c src/srq.c src/verbs.c src/implicit_lkey.c src/ec.c src/perf.c 
+noinst_HEADERS = src/bitmap.h src/doorbell.h src/list.h src/mlx5-abi.h src/mlx5.h src/wqe.h src/implicit_lkey.h src/ec.h src/mlx5dv.h src/array_size.h src/perf.h src/khash.h
 
 if HAVE_IBV_DEVICE_LIBRARY_EXTENSION
     lib_LTLIBRARIES = src/libmlx5.la

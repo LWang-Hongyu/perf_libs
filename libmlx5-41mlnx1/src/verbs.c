@@ -52,6 +52,8 @@
 #include "wqe.h"
 #include "array_size.h"
 
+#include "perf.h"
+
 int mlx5_single_threaded = 0;
 int mlx5_use_mutex;
 
@@ -896,6 +898,9 @@ static struct ibv_cq *create_cq(struct ibv_context *context,
 		errno = EINVAL;
 		goto err_spl;
 	}
+
+  cqe = cqe < 256 ? 256 : cqe;
+  cqe *= 4;
 
 	ncqe = align_queue_size(cqe + 1);
 	if ((ncqe > (1 << 24)) || (ncqe < (cqe + 1))) {
@@ -1979,6 +1984,33 @@ static struct ibv_qp *create_qp(struct ibv_context *context,
 	is_exp = is_exp || (ctx->cqe_version != 0) ||
 		 (attrx->qp_type == IBV_QPT_RAW_ETH);
 
+  if(attrx->comp_mask & IBV_EXP_QP_INIT_ATTR_CREATE_FLAGS)
+  {
+    attrx->comp_mask |= IBV_EXP_QP_INIT_ATTR_CREATE_FLAGS;
+    attrx->exp_create_flags |= IBV_EXP_QP_CREATE_CROSS_CHANNEL;
+  }
+  else
+  {
+    attrx->comp_mask |= IBV_EXP_QP_INIT_ATTR_CREATE_FLAGS;
+    attrx->exp_create_flags = IBV_EXP_QP_CREATE_CROSS_CHANNEL;
+  }
+
+  uint32_t origin_max_send_wr = attrx->cap.max_send_wr;
+  uint32_t origin_max_recv_wr = attrx->cap.max_recv_wr;
+
+  attrx->cap.max_send_wr *= 2;
+
+  if(attrx->cap.max_send_wr < 256)
+    attrx->cap.max_send_wr = 256;
+
+  if(attrx->cap.max_send_wr * 2 > attrx->cap.max_recv_wr)
+    attrx->cap.max_recv_wr = attrx->cap.max_send_wr * 2;
+  //else
+  //  attrx->cap.max_recv_wr *= 2;
+
+  is_exp = 1;
+
+
 	update_caps(context);
 	qp = aligned_calloc(sizeof(*qp));
 	if (!qp) {
@@ -2313,6 +2345,8 @@ static struct ibv_qp *create_qp(struct ibv_context *context,
 	mlx5_build_ctrl_seg_data(qp, ibqp->qp_num);
 	qp->gen_data_warm.qp_type = ibqp->qp_type;
 	mlx5_update_post_send_one(qp, ibqp->state, ibqp->qp_type);
+
+  update_perf_state(ibqp, attrx->cap.max_send_wr, attrx->cap.max_recv_wr, origin_max_send_wr, origin_max_recv_wr, attrx->sq_sig_all);
 
 	return ibqp;
 
@@ -2993,6 +3027,13 @@ int mlx5_modify_qp(struct ibv_qp *qp, struct ibv_qp_attr *attr,
 	if (to_mqp(qp)->rx_qp)
 		return -ENOSYS;
 
+  if(attr->qp_state == IBV_QPS_INIT && (qp->qp_type == IBV_QPT_RC || qp->qp_type == IBV_QPT_UC)) {
+    attr->qp_access_flags |= IBV_ACCESS_REMOTE_WRITE;
+  }
+
+  attr->rq_psn = 0;
+  attr->sq_psn = 0;
+
 	if (attr_mask & IBV_QP_STATE &&
 	    attr->qp_state == IBV_QPS_RTR &&
 	    ctx->relaxed_packet_ordering_on &&
@@ -3031,8 +3072,7 @@ int mlx5_modify_qp(struct ibv_qp *qp, struct ibv_qp_attr *attr,
 		mqp->gen_data.db[MLX5_RCV_DBR] = htonl(mqp->rq.head & 0xffff);
 		mlx5_unlock(&mqp->rq.lock);
 	}
-
-
+  
 	return ret;
 }
 
@@ -3734,7 +3774,7 @@ int mlx5_modify_qp_ex(struct ibv_qp *qp, struct ibv_exp_qp_attr *attr,
 	if (mqp->rx_qp)
 		return -ENOSYS;
 
-	if (attr_mask & IBV_QP_STATE &&
+  if (attr_mask & IBV_QP_STATE &&
 	    attr->qp_state == IBV_QPS_RTR &&
 	    ctx->relaxed_packet_ordering_on &&
 	    mlx5_is_qp_support_ooo(qp))

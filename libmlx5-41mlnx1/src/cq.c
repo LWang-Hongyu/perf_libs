@@ -49,6 +49,8 @@
 #include "wqe.h"
 #include "doorbell.h"
 
+#include "perf.h"
+
 enum {
 	CQ_OK					=  0,
 	CQ_EMPTY				= -1,
@@ -1430,10 +1432,33 @@ static inline int poll_cq(struct ibv_cq *ibcq, int ne, struct ibv_exp_wc *wc,
 
 	mlx5_lock(&cq->lock);
 
-	for (npolled = 0, twc = wc; npolled < ne; ++npolled, twc += wc_size) {
+  int dummy_polled = 0; 
+
+	//for (npolled = 0, twc = wc; npolled < ne; ++npolled, twc += wc_size) {
+  for (npolled = 0, twc = wc; npolled - dummy_polled < ne; ++npolled, twc += wc_size) {
 		err = mlx5_poll_one(cq, &rsc, &srq, twc, wc_size, cqe_ver);
 		if (err != CQ_OK)
+    {
+      if(err == CQ_POLL_ERR)
+        printf("ERROR when poll\n");
+
 			break;
+    }
+      
+    
+    if((wc_size == sizeof(struct ibv_wc) && ((struct ibv_wc*)twc)->wr_id == (uint64_t)-1)
+        || (wc_size == sizeof(struct ibv_exp_wc) && ((struct ibv_exp_wc*)twc)->wr_id == (uint64_t)-1))
+    {
+      dummy_polled++;
+      twc -= wc_size;
+    }
+    /*else
+    {
+      if(wc_size == sizeof(struct ibv_wc))
+        printf("polled wr_id: %lu, %d\n", ((struct ibv_wc*)twc)->wr_id, ((struct ibv_wc*)twc)->status);
+      else
+        printf("polled wr_id: %lu, %d\n", ((struct ibv_exp_wc*)twc)->wr_id, ((struct ibv_exp_wc*)twc)->status);
+    }*/
 	}
 
 	mlx5_update_cons_index(cq);
@@ -1460,30 +1485,73 @@ static inline int poll_cq(struct ibv_cq *ibcq, int ne, struct ibv_exp_wc *wc,
 		}
 	}
 
-	return err == CQ_POLL_ERR ? err : npolled;
+	//return err == CQ_POLL_ERR ? err : npolled;
+	return err == CQ_POLL_ERR ? err : npolled - dummy_polled;
 }
 
 int mlx5_poll_cq(struct ibv_cq *ibcq, int ne, struct ibv_wc *wc)
 {
-	return poll_cq(ibcq, ne, (struct ibv_exp_wc *)wc, sizeof(*wc), 0);
+    //return poll_cq(ibcq, ne, (struct ibv_exp_wc *)wc, sizeof(*wc), 0);
+    return mlx5_poll_cq2(ibcq, ne, wc, 0, 0);
 }
 
 int mlx5_poll_cq_1(struct ibv_cq *ibcq, int ne, struct ibv_wc *wc)
 {
-	return poll_cq(ibcq, ne, (struct ibv_exp_wc *)wc, sizeof(*wc), 1);
+    //return poll_cq(ibcq, ne, (struct ibv_exp_wc *)wc, sizeof(*wc), 1);
+    return mlx5_poll_cq2(ibcq, ne, wc, 1, 0);
+}
+
+int mlx5_poll_cq2 (struct ibv_cq *ibcq, int ne, struct ibv_wc *wc, int cqe_ver, uint32_t skip_perf)
+{
+  if(!skip_perf)
+  {
+    /*
+    if(cqe_ver == 0)
+    {
+      printf("poll_cq version 0 is not supperted yet\n");
+      exit(1);
+    }
+    else
+    */
+      return perf_poll_cq(ibcq, ne, wc, cqe_ver);
+  }
+
+	return poll_cq(ibcq, ne, (struct ibv_exp_wc *)wc, sizeof(*wc), cqe_ver);
 }
 
 int mlx5_poll_cq_ex(struct ibv_cq *ibcq, int ne,
-		    struct ibv_exp_wc *wc, uint32_t wc_size)
+            struct ibv_exp_wc *wc, uint32_t wc_size)
 {
-	return poll_cq(ibcq, ne, wc, wc_size, 0);
+    //return poll_cq(ibcq, ne, wc, wc_size, 0);
+    return mlx5_poll_cq_ex2(ibcq, ne, wc, wc_size, 0, 0);
 }
 
 int mlx5_poll_cq_ex_1(struct ibv_cq *ibcq, int ne,
-		      struct ibv_exp_wc *wc, uint32_t wc_size)
+              struct ibv_exp_wc *wc, uint32_t wc_size)
 {
-	return poll_cq(ibcq, ne, wc, wc_size, 1);
+    //return poll_cq(ibcq, ne, wc, wc_size, 1);
+    return mlx5_poll_cq_ex2(ibcq, ne, wc, wc_size, 1, 0);
 }
+
+int mlx5_poll_cq_ex2(struct ibv_cq *ibcq, int ne,
+		    struct ibv_exp_wc *wc, uint32_t wc_size, int cqe_ver, uint32_t skip_perf)
+{
+  if(!skip_perf)
+  {
+    /*
+    if(cqe_ver == 0)
+    {
+      printf("ex_poll_cq version 0 is not supported yet\n");
+      exit(1);
+    }
+    else
+    */
+      return perf_exp_poll_cq(ibcq, ne, wc, wc_size, cqe_ver);
+  }
+	
+  return poll_cq(ibcq, ne, wc, wc_size, cqe_ver);
+}
+
 
 int mlx5_arm_cq(struct ibv_cq *ibvcq, int solicited)
 {
