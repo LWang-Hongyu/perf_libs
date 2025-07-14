@@ -43,6 +43,10 @@
 #include "mlx5.h"
 #include "mlx5_ifc.h"
 #include "wqe.h"
+#include <unistd.h>
+#include "mtrdma.h"
+
+#include <infiniband/verbs.h>
 
 #define MLX5_ATOMIC_SIZE 8
 
@@ -1202,8 +1206,49 @@ int mlx5_post_send(struct ibv_qp *ibqp, struct ibv_send_wr *wr,
 	}
 #endif
 
+	// Calculate the sleep time based on the bandwidth and data size
+	// Assuming 100Gbps bandwidth and 4096B data size
+	// Convert Gbps to bits per second: 100Gbps = 100,000,000,000 bits/s
+	// Convert bytes to bits: 4096B = 4096 * 8 = 32,768 bits
+	// Calculate time in seconds: time = data_size / bandwidth
+	// Convert time from seconds to microseconds: time_us = time * 1,000,000
+	// Sleep for the calculated time
+	// nanosleep((const struct timespec[]){ { 0, 10 } }, NULL);
+	// struct mlx5_qp *qp = to_mqp(ibqp);
+	// printf("The return value of mlx5_get_sq_num is: %d\n", qp->sq.max_post);
+
+	// printf("phx change\n");
+	if (wr->sg_list->length <= 1024) {
+		return _mlx5_post_send(ibqp, wr, bad_wr);
+	}
+
+	mtrdma_post_send(ibqp, wr);
+	return 0;
+
+	// return _mlx5_post_send(ibqp, wr, bad_wr);
+}
+
+// MTRDMA new add start
+int mlx5_post_send2(struct ibv_qp *ibqp, struct ibv_send_wr *wr,
+		    struct ibv_send_wr **bad_wr)
+{
+#ifdef MW_DEBUG
+	if (wr->opcode == IBV_WR_BIND_MW) {
+		if (wr->bind_mw.mw->type == IBV_MW_TYPE_1)
+			return EINVAL;
+
+		if (!wr->bind_mw.bind_info.mr || !wr->bind_mw.bind_info.addr ||
+		    !wr->bind_mw.bind_info.length)
+			return EINVAL;
+
+		if (wr->bind_mw.bind_info.mr->pd != wr->bind_mw.mw->pd)
+			return EINVAL;
+	}
+#endif
+
 	return _mlx5_post_send(ibqp, wr, bad_wr);
 }
+// MTRDMA new add end
 
 enum {
 	WQE_REQ_SETTERS_UD_XRC_DC = 2,

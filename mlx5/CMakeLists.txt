@@ -10,6 +10,7 @@ if (MLX5_MW_DEBUG)
   add_definitions("-DMW_DEBUG")
 endif()
 
+
 rdma_shared_provider(mlx5 libmlx5.map
   1 1.24.${PACKAGE_VERSION}
   buf.c
@@ -38,12 +39,20 @@ rdma_shared_provider(mlx5 libmlx5.map
   qp.c
   srq.c
   verbs.c
+  mtrdma.c
 )
 
 publish_headers(infiniband
   ../../kernel-headers/rdma/mlx5_user_ioctl_verbs.h
   mlx5_api.h
   mlx5dv.h
+  mtrdma.h
+  khash.h
+)
+
+target_link_libraries(mlx5 LINK_PRIVATE
+  rt
+  pthread
 )
 
 rdma_pkg_config("mlx5" "libibverbs" "${CMAKE_THREAD_LIBS_INIT}")

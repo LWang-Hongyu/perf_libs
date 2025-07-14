@@ -58,6 +58,7 @@
 #include "mlx5-abi.h"
 #include "wqe.h"
 #include "mlx5_ifc.h"
+#include "mtrdma.h"
 
 int mlx5_single_threaded = 0;
 
@@ -1163,6 +1164,10 @@ struct ibv_cq *mlx5_create_cq(struct ibv_context *context, int cqe,
 			      struct ibv_comp_channel *channel, int comp_vector)
 {
 	struct ibv_cq_ex *cq;
+
+	cqe = cqe < 256 ? 256 : cqe;
+	cqe *= 4;
+
 	struct ibv_cq_init_attr_ex cq_attr = { .cqe = cqe,
 					       .channel = channel,
 					       .comp_vector = comp_vector,
@@ -2308,6 +2313,17 @@ static struct ibv_qp *create_qp(struct ibv_context *context,
 		return NULL;
 	}
 
+	uint32_t origin_max_send_wr = attr->cap.max_send_wr;
+	uint32_t origin_max_recv_wr = attr->cap.max_recv_wr;
+
+	attr->cap.max_send_wr *= 2;
+
+	if (attr->cap.max_send_wr < 256)
+		attr->cap.max_send_wr = 256;
+
+	if (attr->cap.max_send_wr * 2 > attr->cap.max_recv_wr)
+		attr->cap.max_recv_wr = attr->cap.max_send_wr * 2;
+
 	qp = calloc(1, sizeof(*qp));
 	if (!qp) {
 		mlx5_dbg(fp, MLX5_DBG_QP, "\n");
@@ -2686,6 +2702,10 @@ static struct ibv_qp *create_qp(struct ibv_context *context,
 		qp->verbs_qp.comp_mask |= VERBS_QP_EX;
 
 	set_qp_operational_state(qp, IBV_QPS_RESET);
+
+	update_mtrdma_state(ibqp, attr->cap.max_send_wr, attr->cap.max_recv_wr,
+			    origin_max_send_wr, origin_max_recv_wr,
+			    attr->sq_sig_all);
 
 	return ibqp;
 

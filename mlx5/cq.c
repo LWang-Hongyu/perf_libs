@@ -46,6 +46,8 @@
 #include "mlx5.h"
 #include "wqe.h"
 
+#include "mtrdma.h"
+
 enum { CQ_OK = 0, CQ_EMPTY = -1, CQ_POLL_ERR = -2, CQ_POLL_NODATA = ENOENT };
 
 enum {
@@ -1421,12 +1423,23 @@ static inline void mlx5_end_poll_lock(struct ibv_cq_ex *ibcq)
 
 int mlx5_poll_cq(struct ibv_cq *ibcq, int ne, struct ibv_wc *wc)
 {
-	return poll_cq(ibcq, ne, wc, 0);
+	return mlx5_poll_cq2(ibcq, ne, wc, 0);
 }
 
 int mlx5_poll_cq_v1(struct ibv_cq *ibcq, int ne, struct ibv_wc *wc)
 {
-	return poll_cq(ibcq, ne, wc, 1);
+	return mlx5_poll_cq2(ibcq, ne, wc, 1);
+}
+
+int mlx5_poll_cq_early(struct ibv_cq *ibcq, int ne, struct ibv_wc *wc,
+		       int cqe_ver)
+{
+	return poll_cq(ibcq, ne, wc, cqe_ver);
+}
+
+int mlx5_poll_cq2(struct ibv_cq *ibcq, int ne, struct ibv_wc *wc, int cqe_ver)
+{
+	return mtrdma_poll_cq(ibcq, ne, wc, cqe_ver);
 }
 
 static inline enum ibv_wc_opcode mlx5_cq_read_wc_opcode(struct ibv_cq_ex *ibcq)
